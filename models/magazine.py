@@ -1,134 +1,175 @@
-from __init__ import CURSOR, CONN
-
+# Import database
+from database.connection import get_db_connection
 
 class Magazine:
-    def __init__(self, id = None, name= None, category = None):
-        self.id = int(id)
-        self.name = str(name)
-        self.category = str(category)
+
+    all = {}
+    def __init__(self, id, name = None, category = None):
+        self._id = id
+        self._name = name
+        self._category = category
 
     def __repr__(self):
-        return f'<Magazine {self.name}>'
-
-    # from database.setup import create_tables
-
+        return f'<Magazine {self.id} {self.name} {self.category}>'
+    
     @property
     def id(self):
-        return self.__dict
+        return self._id
+    
     @id.setter
-    def id(self, value):
-        if isinstance(value, int):
-            self._id = value
-        else:
-            raise ValueError("ID must be of int type")
+    def id(self, id):
+        if isinstance(id, int):
+            self._id = id
+
 
     @property
     def name(self):
         return self._name
+    
     @name.setter
-    def name(self, value):
-        if not isinstance(value, str):
-            raise ValueError("Name must be of type str")
-        if not (2 <= len(value) <= 16):
-            raise ValueError("Name must be between 2 and 16 characters, inclusive")
-        self._name = value
-        
+    def name(self, new_name):
+        if isinstance(new_name, str) and 2 <= len(new_name) <= 16:
+            self._name = new_name
+
     @property
     def category(self):
         return self._category
+    
     @category.setter
-    def category(self, value):
-        if isinstance(value, str):
-            if len(value):
-                self._category = value
-            else:
-                raise ValueError("Category must be longer than 0 characters")
-        else:
-            raise TypeError("Category must be a string")
+    def category(self, new_category):
+        if isinstance(new_category, str) and len(new_category) > 0:
+            self._category = new_category
+    
 
+    def save(self):
+        conn = get_db_connection()
+        CURSOR = conn.cursor()
+        sql = """
+            INSERT INTO magazines (name, category)
+            VALUES (?,?)
+        """
+        CURSOR.execute(sql, (self.name, self.category))
+        conn.commit()
+        
+        self.id = CURSOR.lastrowid
+        type(self).all[self.id] = self
+
+    @classmethod
+    #creates a new entry in the database
+    def create(cls, name, category):
+        magazine = cls(name, category)
+        magazine.save()
+        return magazine
+    
+    def get_magazine_id(self):
+        return self.id
+    
 
     def articles(self):
         from models.article import Article
+        conn = get_db_connection()
+        CURSOR = conn.cursor()
+        """retrieves and returns a list of articles in this magazine """
         sql = """
-            SELECT articles.id, articles.title, articles.content, articles.author_id, articles.magazine_id
-            FROM articles
-            WHERE articles.magazine_id = ?
+            SELECT ar.*
+            FROM articles ar
+            INNER JOIN magazines m ON ar.magazine = m.id
+            WHERE m.id = ?
         """
-        CURSOR.execute(sql, (self.id,))
-        rows = CURSOR.fetchall()
-        return [Article(row[0], row[1], row[2], row[3], row[4]) for row in rows]
-    
 
+        CURSOR.execute(sql, (self.id,))
+        article_data = CURSOR.fetchall()
+
+        articles = []
+        for row in article_data:
+            articles.append(Article(*row))
+
+        return articles
+    
     def contributors(self):
         from models.author import Author
+        conn = get_db_connection()
+        CURSOR = conn.cursor()
+        """retrieves and returns a lst of authors who wrote articles in this magazine"""
         sql = """
-            SELECT DISTINCT authors.id, authors.name
-            FROM authors
-            INNER JOIN articles
-            ON authors.id = articles.author_id
-            WHERE articles.magazine_id = ?
+            SELECT DISTINCT a.*
+            FROM authors a
+            INNER JOIN articles ar ON ar.author = a.id
+            INNER JOIN magazines m on ar.magazine = m.id
+            WHERE m.id = ?
         """
-        CURSOR.execute(sql, (self.id,))
-        rows = CURSOR.fetchall()
-        return [Author(row[0], row[1]) for row in rows]
 
-
-    def article_titles(self):
-        sql = """
-            SELECT articles.title
-            FROM articles
-            WHERE articles.magazine_id = ?
-        """
         CURSOR.execute(sql, (self.id,))
-        rows = CURSOR.fetchall()
-        return [row[0] for row in rows] if rows else None
+        author_data = CURSOR.fetchall()
+
+        authors = []
+        for row in author_data:
+            authors.append(Author(*row))
+        return authors
     
+    def article_titles(self):
+        conn = get_db_connection()
+        CURSOR = conn.cursor()
+        """
+        Retrieves and returns a list of titles (strings) of all articles written for this magazine.
+        Returns None if the magazine has no articles.
+        """
+        sql = """
+            SELECT ar.title
+            FROM articles ar
+            INNER JOIN magazines m ON ar.magazine = m.id
+            WHERE m.id = ?
+        """
+
+        CURSOR.execute(sql, (self.id,))
+        article_data = CURSOR.fetchall()
+
+        if not article_data:
+            return None
+
+        titles = [row[0] for row in article_data]
+        return titles
 
     def contributing_authors(self):
         from models.author import Author
-        sql = """
-            SELECT authors.id, authors.name
-            FROM authors
-            INNER JOIN articles
-            ON authors.id = articles.author_id
-            WHERE articles.magazine_id = ?
-            GROUP BY authors.id, authors.name
-            HAVING COUNT(articles.id) > 2
+        conn = get_db_connection()
+        CURSOR = conn.cursor()
         """
+        Retrieves and returns a list of Author objects who wrote more than 2 articles for this magazine.
+        Returns None if the magazine has no authors with more than 2 publications.
+        """
+        sql = """
+            SELECT DISTINCT a.*
+            FROM authors a
+            INNER JOIN articles ar ON ar.author = a.id
+            INNER JOIN magazines m on ar.magazine = m.id
+            WHERE m.id = ?
+            GROUP BY a.id
+            HAVING COUNT(ar.id) > 2
+        """
+
         CURSOR.execute(sql, (self.id,))
-        rows = CURSOR.fetchall()
-        return [Author(row[0], row[1]) for row in rows] if rows else None
+        author_data = CURSOR.fetchall()
 
+        if not author_data:
+            return None
 
-    def save(self):
-        if self.id is None:
-            sql = """
-                INSERT INTO magazines (name, category)
-                VALUES (?, ?)
-            """
-            CURSOR.execute(sql, (self.name, self.category))
-            CONN.commit()
-            self.id = CURSOR.lastrowid
-        else:
-            sql = """
-                UPDATE magazines
-                SET name = ?, category = ?
-                WHERE id = ?
-            """
-            CURSOR.execute(sql, (self.name, self.category, self.id))
-            CONN.commit()
+        authors = []
+        for row in author_data:
+            authors.append(Author(*row)) 
 
-
-    @classmethod
-    def instance_from_db(cls, row):
-        return cls(row[0], row[1],row[2])
-
-    @classmethod
-    def get_all(cls):
-        sql = """
-            SELECT *
-            FROM magazines
-        """
-        rows = CURSOR.execute(sql).fetchall()
-        return [cls.instance_from_db(row) for row in rows]
+        return authors
     
+    @classmethod
+    def find_by_id(cls, id):
+        conn = get_db_connection()
+        CURSOR = conn.cursor()
+        sql = """
+            SELECT * FROM magazines
+            WHERE id = ?
+        """
+        CURSOR.execute(sql, (id,))
+        row = CURSOR.fetchone()
+        if row:
+            return Magazine(*row)
+        return None
